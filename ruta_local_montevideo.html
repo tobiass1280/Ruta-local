@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Ruta Local — Montevideo</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    :root{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#172033;background:#f4f6fa}
+    *{box-sizing:border-box}body{margin:0}header{background:#14233b;color:white;padding:22px 20px}
+    header h1{margin:0 0 5px;font-size:23px}header p{margin:0;color:#cbd5e1;font-size:14px}
+    main{max-width:1200px;margin:20px auto;padding:0 16px;display:grid;grid-template-columns:390px 1fr;gap:18px}
+    .panel,.mapbox{background:white;border:1px solid #e4e8ef;border-radius:14px;box-shadow:0 5px 18px #1720330b;overflow:hidden}
+    .panel{padding:18px}.section-title{font-size:15px;font-weight:750;margin:0 0 12px}
+    label{display:block;font-size:12px;font-weight:700;color:#526078;margin:12px 0 5px}
+    input{width:100%;border:1px solid #d6dce6;border-radius:8px;padding:10px 11px;font:inherit;font-size:14px;outline:none}
+    input:focus{border-color:#3978d5;box-shadow:0 0 0 3px #3978d51a}
+    .hint{font-size:11px;color:#718096;line-height:1.45;margin-top:5px}
+    .stop{padding:11px;border:1px solid #e5e9f0;border-radius:10px;margin-top:10px;background:#fbfcfe}
+    .stop-head{display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:750;color:#35445d}
+    .stop-head button{border:0;background:transparent;color:#bd4651;cursor:pointer;font-size:12px}
+    .stop input{margin-top:7px}
+    .actions{display:flex;gap:8px;margin-top:12px}
+    button.primary,button.secondary{border:0;border-radius:9px;padding:11px 13px;font-weight:750;cursor:pointer}
+    button.primary{background:#2166d1;color:white;width:100%;margin-top:16px}
+    button.primary:disabled{opacity:.55;cursor:wait}
+    button.secondary{background:#edf2f8;color:#263750;white-space:nowrap}
+    .origin-actions{display:flex;gap:7px;align-items:center}
+    .origin-actions input{flex:1;min-width:0}
+    .check{display:flex;align-items:center;gap:8px;font-size:13px;color:#46546b;margin-top:12px}
+    .check input{width:auto}
+    #map{height:620px;min-height:440px}
+    .mapbox{position:relative}
+    .map-top{padding:13px 16px;border-bottom:1px solid #edf0f4;display:flex;justify-content:space-between;align-items:center}
+    .map-top strong{font-size:14px}.status{font-size:12px;color:#64748b}
+    #results{margin-top:16px}.summary{background:#eef5ff;border:1px solid #d8e7ff;border-radius:10px;padding:12px;font-size:13px;line-height:1.5}
+    ol.route-list{padding-left:24px;margin:12px 0 0}ol.route-list li{padding:5px 0;font-size:13px;color:#35445d}
+    .error{background:#fff0f0;color:#a32f38;border:1px solid #ffd5d5;border-radius:9px;padding:10px;font-size:13px;margin-top:12px}
+    .legend{font-size:11px;color:#6b778c;margin-top:14px;line-height:1.5}
+    @media(max-width:850px){main{grid-template-columns:1fr}#map{height:480px;min-height:380px}}
+  </style>
+</head>
+<body>
+<header>
+  <h1>Ruta Local</h1>
+  <p>Ordená tus visitas por la ruta más conveniente en Montevideo y el departamento.</p>
+</header>
+<main>
+  <section class="panel">
+    <h2 class="section-title">1. Punto de partida</h2>
+    <label for="origin">¿Desde dónde salís?</label>
+    <div class="origin-actions">
+      <input id="origin" value="Buceo, Montevideo, Uruguay" placeholder="Ej. Buceo, Montevideo">
+      <button class="secondary" id="locate" type="button" title="Usar mi ubicación">📍 Mi ubicación</button>
+    </div>
+    <div class="hint">Podés escribir una dirección, barrio o usar la ubicación del dispositivo.</div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:22px">
+      <h2 class="section-title" style="margin:0">2. Locales a visitar</h2>
+      <span class="hint">Nombre + dirección</span>
+    </div>
+    <div id="stops"></div>
+    <div class="actions">
+      <button class="secondary" id="add" type="button">＋ Agregar local</button>
+    </div>
+    <label class="check"><input type="checkbox" id="fixedEnd"> Mantener el último local como destino final</label>
+    <div class="hint">Activá esto si necesitás terminar sí o sí en el último local de la lista.</div>
+    <button class="primary" id="calculate">Encontrar la mejor ruta</button>
+    <div id="message" aria-live="polite"></div>
+    <div id="results"></div>
+    <div class="legend">La optimización minimiza la distancia estimada por calles. El tiempo real puede variar por tránsito, obras y sentido de circulación.</div>
+  </section>
+  <section class="mapbox">
+    <div class="map-top"><strong>Mapa de tu recorrido</strong><span class="status" id="mapStatus">Esperando locales</span></div>
+    <div id="map"></div>
+  </section>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const stopsEl = $('stops'), messageEl = $('message'), resultsEl = $('results');
+  let stopCount = 0, startCoords = null, markers = [], routeLine = null, usingDeviceLocation = false;
+
+  const map = L.map('map').setView([-34.9011,-56.1645], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  }).addTo(map);
+
+  function addStop(name='', address='') {
+    stopCount++;
+    const id = stopCount;
+    const div = document.createElement('div');
+    div.className = 'stop'; div.dataset.stopId = id;
+    div.innerHTML = `<div class="stop-head"><span>LOCAL ${stopsEl.children.length + 1}</span><button type="button" class="remove">Quitar</button></div>
+      <input class="stop-name" placeholder="Nombre del local (ej. El Retiro)" value="${escapeAttr(name)}" aria-label="Nombre del local">
+      <input class="stop-address" placeholder="Dirección completa, ciudad o barrio" value="${escapeAttr(address)}" aria-label="Dirección del local">`;
+    div.querySelector('.remove').addEventListener('click', () => { div.remove(); renumber(); });
+    stopsEl.appendChild(div); renumber();
+  }
+  function escapeAttr(s){return String(s).replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
+  function renumber(){[...stopsEl.children].forEach((el,i)=>el.querySelector('.stop-head span').textContent=`LOCAL ${i+1}`);}
+  $('add').addEventListener('click',()=>addStop());
+  addStop('El Retiro',''); addStop('Truvil',''); addStop('Bar TV',''); addStop('El Fogón','');
+
+  $('locate').addEventListener('click',()=>{
+    if(!navigator.geolocation){showError('Este navegador no permite obtener la ubicación. Escribí el punto de partida manualmente.');return;}
+    $('locate').disabled=true; $('locate').textContent='Buscando…';
+    navigator.geolocation.getCurrentPosition(pos=>{
+      startCoords=[pos.coords.longitude,pos.coords.latitude]; usingDeviceLocation=true;
+      $('origin').value='Mi ubicación actual'; $('locate').disabled=false; $('locate').textContent='📍 Mi ubicación';
+      $('mapStatus').textContent='Ubicación actual seleccionada';
+    },err=>{
+      $('locate').disabled=false; $('locate').textContent='📍 Mi ubicación';
+      showError('No se pudo acceder a tu ubicación. Revisá los permisos del navegador o ingresá una dirección.');
+    },{enableHighAccuracy:true,timeout:12000});
+  });
+
+  function showError(text){messageEl.innerHTML=`<div class="error">${escapeAttr(text)}</div>`;}
+  function clearMap(){
+    markers.forEach(m=>map.removeLayer(m)); markers=[];
+    if(routeLine){map.removeLayer(routeLine);routeLine=null;}
+  }
+  const wait = ms => new Promise(r=>setTimeout(r,ms));
+
+  async function geocode(query){
+    const url='https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=uy&q='+encodeURIComponent(query+', Uruguay');
+    const res=await fetch(url,{headers:{'Accept-Language':'es'}});
+    if(!res.ok) throw new Error('El servicio de búsqueda de direcciones no respondió.');
+    const data=await res.json();
+    if(!data.length) throw new Error(`No encontré esta dirección: "${query}". Probá agregar calle, número y localidad.`);
+    return {coords:[Number(data[0].lon),Number(data[0].lat)], label:data[0].display_name};
+  }
+
+  // Held–Karp: encuentra el recorrido abierto de menor distancia para hasta 12 paradas.
+  function exactPath(matrix, fixedEnd){
+    const n=matrix.length-1, endIndex=fixedEnd?n-1:-1;
+    if(n>12) return heuristicPath(matrix,fixedEnd);
+    const free = fixedEnd ? n-1 : n;
+    const size=1<<free, dp=new Map(), prev=new Map();
+    for(let j=0;j<free;j++){const mask=1<<j;dp.set(mask*32+j,matrix[0][j+1]);prev.set(mask*32+j,-1);}
+    for(let mask=1;mask<size;mask++){
+      for(let j=0;j<free;j++){
+        if(!(mask&(1<<j)))continue;
+        const key=mask*32+j, old=dp.get(key);
+        if(old===undefined)continue;
+        for(let k=0;k<free;k++){
+          if(mask&(1<<k))continue;
+          const nm=mask|(1<<k), nk=nm*32+k, cost=old+matrix[j+1][k+1];
+          if(cost<(dp.get(nk)??Infinity)){dp.set(nk,cost);prev.set(nk,j);}
+        }
+      }
+    }
+    const full=size-1; let best=Infinity,last=-1;
+    for(let j=0;j<free;j++){
+      const cost=dp.get(full*32+j)+(fixedEnd?matrix[j+1][n]:0);
+      if(cost<best){best=cost;last=j;}
+    }
+    const order=[];let mask=full,j=last;
+    while(j>=0){order.push(j+1);const p=prev.get(mask*32+j);mask^=1<<j;j=p;}
+    order.reverse();if(fixedEnd)order.push(n);
+    return order;
+  }
+  function heuristicPath(matrix,fixedEnd){
+    const n=matrix.length-1, free=fixedEnd?n-1:n, remaining=new Set(Array.from({length:free},(_,i)=>i+1)), order=[], end=fixedEnd?n:-1;
+    let cur=0;
+    while(remaining.size){let best=-1,cost=Infinity;for(const j of remaining)if(matrix[cur][j]<cost){cost=matrix[cur][j];best=j;}order.push(best);remaining.delete(best);cur=best;}
+    if(fixedEnd)order.push(end);
+    // 2-opt mejora el orden manteniendo el inicio y, si corresponde, el final.
+    let improved=true, rounds=0;
+    while(improved&&rounds++<80){improved=false;for(let i=0;i<order.length-1;i++)for(let k=i+1;k<order.length;k++){
+      const a=i===0?0:order[i-1],b=order[i],c=order[k],d=k===order.length-1?(fixedEnd?end:-1):order[k+1];
+      const old=matrix[a][b]+(d<0?0:matrix[c][d]), neu=matrix[a][c]+(d<0?0:matrix[b][d]);
+      if(neu+0.01<old){const rev=order.slice(i,k+1).reverse();order.splice(i,rev.length,...rev);improved=true;}
+    }}
+    return order;
+  }
+
+  $('calculate').addEventListener('click', async()=>{
+    messageEl.innerHTML='';resultsEl.innerHTML='';
+    const entries=[...stopsEl.children].map(el=>({name:el.querySelector('.stop-name').value.trim(),address:el.querySelector('.stop-address').value.trim()}));
+    if(entries.length<1||entries.some(x=>!x.name||!x.address)){showError('Completá el nombre y la dirección de cada local.');return;}
+    if(entries.length>18){showError('Para mantener el cálculo ágil, ingresá hasta 18 locales por recorrido.');return;}
+    const originText=$('origin').value.trim();
+    if(!startCoords&&!originText){showError('Ingresá un punto de partida o usá Mi ubicación.');return;}
+    const btn=$('calculate');btn.disabled=true;btn.textContent='Calculando ruta…';
+    try{
+      $('mapStatus').textContent='Buscando direcciones…';
+      let origin;
+      if(startCoords&&usingDeviceLocation) origin={coords:startCoords,label:'Ubicación actual'};
+      else {origin=await geocode(originText);await wait(1100);}
+      const locations=[origin];
+      for(let i=0;i<entries.length;i++){
+        $('mapStatus').textContent=`Ubicando local ${i+1} de ${entries.length}…`;
+        const found=await geocode(entries[i].address);await wait(1100);
+        locations.push({...found,name:entries[i].name});
+      }
+      $('mapStatus').textContent='Calculando distancias por calles…';
+      const coordString=locations.map(p=>p.coords.join(',')).join(';');
+      const tableRes=await fetch(`https://router.project-osrm.org/table/v1/driving/${coordString}?annotations=distance`);
+      if(!tableRes.ok)throw new Error('No pude calcular las distancias de ruta. Intentá nuevamente.');
+      const table=await tableRes.json();
+      if(table.code!=='Ok'||!table.distances)throw new Error('El servicio de rutas no pudo conectar todos los puntos. Revisá las direcciones.');
+      const matrix=table.distances.map(row=>row.map(v=>v==null?1e12:v));
+      const order=exactPath(matrix,$('fixedEnd').checked);
+      const sequence=[0,...order];
+      const ordered=order.map(i=>locations[i]);
+      const routeCoords=sequence.map(i=>locations[i].coords);
+      const routeRes=await fetch(`https://router.project-osrm.org/route/v1/driving/${routeCoords.map(c=>c.join(',')).join(';')}?overview=full&geometries=geojson&steps=false`);
+      if(!routeRes.ok)throw new Error('No pude dibujar el recorrido en el mapa.');
+      const routeData=await routeRes.json();
+      if(routeData.code!=='Ok'||!routeData.routes?.length)throw new Error('No hay una ruta vial disponible entre esos puntos.');
+      const route=routeData.routes[0], km=route.distance/1000, mins=route.duration/60;
+      clearMap();
+      routeLine=L.geoJSON(route.geometry,{style:{color:'#2166d1',weight:5,opacity:.85}}).addTo(map);
+      locations.forEach((p,i)=>{
+        const isOrigin=i===0, idx=order.indexOf(i);
+        const label=isOrigin?'SALIDA':`PARADA ${idx+1}`;
+        const marker=L.marker([p.coords[1],p.coords[0]]).addTo(map).bindPopup(`<b>${label}</b><br>${isOrigin?'Punto de partida':escapeAttr(p.name)}<br>${escapeAttr(p.label)}`);
+        markers.push(marker);
+      });
+      map.fitBounds(routeLine.getBounds(),{padding:[30,30]});
+      $('mapStatus').textContent=`${ordered.length} locales · ${km.toFixed(1)} km aprox.`;
+      const items=ordered.map((p,i)=>`<li><b>${escapeAttr(p.name)}</b> — ${escapeAttr(p.address||p.label)}</li>`).join('');
+      resultsEl.innerHTML=`<div class="summary"><b>Ruta optimizada</b><br>Distancia estimada: <b>${km.toFixed(1)} km</b><br>Tiempo de conducción estimado: <b>${Math.round(mins)} min</b><br>Salida: ${escapeAttr(originText||'Mi ubicación actual')}</div><ol class="route-list">${items}</ol>`;
+    }catch(err){showError(err.message||'Ocurrió un error inesperado.');$('mapStatus').textContent='No se pudo calcular';}
+    finally{btn.disabled=false;btn.textContent='Encontrar la mejor ruta';}
+  });
+})();
+</script>
+</body>
+</html>
